@@ -1219,6 +1219,7 @@ export function createRealtimeSessionRuntime({
       inputs.submit(event, source)
     },
     handleClientDelivery,
+    deliverContext: delivery => agentDeliveries.deliver({ ...delivery, mode: 'context' }),
     applyInputSuspension,
     deactivate,
     status: () => realtimeSession.status({ sleeping, waking }),

@@ -659,6 +659,10 @@ export class AcpBackendAdapter {
       ? delegation.status !== 'running' || delegation.signal?.aborted
       : run.closed || run.turnClosed) return
     run.receivedUpdate = true
+    if (update?._meta?.['qwen-audio-agent/structured-output'] === true) {
+      run.onEvent?.(backendEvent(BackendEventType.ACTIVITY, { activity: { id: 'acp-result-output', kind: 'output', label: 'Preparing task result', status: 'running' } }))
+      return
+    }
     run.toolCalls ||= new Map()
     run.messageStreams ||= {}
     const streamedMessage = messageFromUpdate(update, run.messageStreams)

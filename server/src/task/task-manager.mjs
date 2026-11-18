@@ -688,7 +688,7 @@ export class TaskManager {
       if ((task.executionVersion || 0) !== executionVersion || task.terminalHandled) return
       if (this.executionEvidenceRequired && (
         [BackendEventType.MESSAGE, BackendEventType.ARTIFACT, BackendEventType.AUTHORIZATION_REQUESTED, BackendEventType.INPUT_REQUESTED].includes(event?.type)
-        || (event?.type === BackendEventType.ACTIVITY && ['tool', 'thinking'].includes(event.activity?.kind))
+        || (event?.type === BackendEventType.ACTIVITY && ['tool', 'thinking', 'output'].includes(event.activity?.kind))
       )) observeExecution()
       if (
         event?.type === BackendEventType.AUTHORIZATION_REQUESTED

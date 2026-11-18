@@ -596,6 +596,7 @@ export class AcpProcessClient {
   }
 
   async prompt(sessionId, prompt, {
+    meta,
     signal,
     timeoutMs = this.timeoutMs,
     onUpdate,
@@ -680,6 +681,7 @@ export class AcpProcessClient {
           {
             sessionId: id,
             prompt: promptBlocks,
+            ...(meta ? { _meta: meta } : {}),
           },
           { signal: remoteController.signal, guardSignal: combined, timeoutMs: 0 },
         )

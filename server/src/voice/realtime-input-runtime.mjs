@@ -118,7 +118,7 @@ export class RealtimeInputRuntime {
     this.onSpeechStarted({
       turnId: started.context.turnId,
       source: 'realtime_provider',
-      sourceContext: this.audioSources.get(started.context.turnId) || null,
+      ...(this.audioSources.has(started.context.turnId) ? { sourceContext: this.audioSources.get(started.context.turnId) } : {}),
     })
     this.announcementWindow.beginTurn(started.context.turnId)
     this.announcements.dismissActive()
@@ -152,7 +152,7 @@ export class RealtimeInputRuntime {
     this.onSpeechStopped({
       turnId: stoppedTurn.turnId,
       source: 'realtime_provider',
-      sourceContext: source || null,
+      ...(source ? { sourceContext: source } : {}),
       ...(event.reason ? { reason: String(event.reason) } : {}),
     })
     this.turns.endSpeech()

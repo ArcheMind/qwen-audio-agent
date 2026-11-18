@@ -112,8 +112,10 @@ export class TaskOperations {
     included.forEach(entry => { entry.status = 'pending' })
     if (included.length) this.taskManager.emit(TaskDomainEvent.UPDATED, task)
     try {
-      await this.taskManager.repository.store?.flush?.()
-      await this.beforeExecution?.(input, context)
+      if (this.beforeExecution) {
+        await this.taskManager.repository.store?.flush?.()
+        await this.beforeExecution(input, context)
+      }
       context.signal?.throwIfAborted()
       const result = await this.backendRuntime.run(input, {
         ...context, ownerId,
