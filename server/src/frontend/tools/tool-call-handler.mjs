@@ -88,6 +88,7 @@ export class ToolCallHandler {
     getTurnGeneration,
     backendRuntime,
     taskOperations,
+    hostToolHandler = null,
     backendAvailability = null,
     memoryService,
     notesStore,
@@ -120,6 +121,7 @@ export class ToolCallHandler {
     this.taskOperations = taskOperations || (taskManager ? new TaskOperations({
       taskManager, backendRuntime, respondAuthorization, respondInput, permissionPolicy,
     }) : null)
+    this.hostToolHandler = hostToolHandler
     this.backendAvailability = backendAvailability
     this.memoryService = memoryService
     this.notesStore = notesStore
@@ -597,6 +599,13 @@ export class ToolCallHandler {
       if (this.stoppedToolTurns.has(this.toolTurnKey(turnId, generation))) {
         await this.stopToolLoop({ callId, turnId, turnGeneration: generation }, 'stopped')
         return { handled: true, executed: false, limit: { admitted: false, reason: 'stopped' } }
+      }
+      if (this.hostToolHandler) {
+        const result = await this.hostToolHandler({ name: toolName, args, callId, turnId, generation })
+        if (result?.handled) {
+          await this.sendOutput(callId, result.value, turnId, result.taskId)
+          return { handled: true, executed: true, value: result.value }
+        }
       }
       if (external) {
         return await this.executeExternalToolCall(external, {

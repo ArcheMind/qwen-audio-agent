@@ -47,6 +47,8 @@ export class RealtimeInputRuntime {
     reportFrontendError,
     onSpeechStarted = () => {},
     onSpeechStopped = () => {},
+    getAudioSource = () => null,
+    automaticResponse = true,
     createInputTurnId = () => `text_${randomUUID().replaceAll('-', '')}`,
   }) {
     this.ownerId = ownerId
@@ -67,6 +69,9 @@ export class RealtimeInputRuntime {
     this.reportFrontendError = reportFrontendError
     this.onSpeechStarted = onSpeechStarted
     this.onSpeechStopped = onSpeechStopped
+    this.getAudioSource = getAudioSource
+    this.automaticResponse = automaticResponse
+    this.audioSources = new Map()
     this.createInputTurnId = createInputTurnId
   }
 
@@ -107,10 +112,13 @@ export class RealtimeInputRuntime {
   #startSpeech(event) {
     const started = this.turns.beginVoice(event.item_id)
     if (!started.accepted) return
+    const source = this.getAudioSource()
+    if (source?.speakerId) this.audioSources.set(started.context.turnId, { ...structuredClone(source), utteranceId: randomUUID(), startedAt: Date.now(), endedAt: null, final: false })
     this.clearResponseCandidate()
     this.onSpeechStarted({
       turnId: started.context.turnId,
       source: 'realtime_provider',
+      sourceContext: this.audioSources.get(started.context.turnId) || null,
     })
     this.announcementWindow.beginTurn(started.context.turnId)
     this.announcements.dismissActive()
@@ -139,9 +147,12 @@ export class RealtimeInputRuntime {
       this.turns.invalidateInput(event.item_id)
       return
     }
+    const source = this.audioSources.get(stoppedTurn.turnId)
+    if (source) source.endedAt = Date.now()
     this.onSpeechStopped({
       turnId: stoppedTurn.turnId,
       source: 'realtime_provider',
+      sourceContext: source || null,
       ...(event.reason ? { reason: String(event.reason) } : {}),
     })
     this.turns.endSpeech()
@@ -164,7 +175,7 @@ export class RealtimeInputRuntime {
       })
       return
     }
-    this.expectResponseFor(stoppedTurn)
+    if (this.automaticResponse) this.expectResponseFor(stoppedTurn)
     this.send({
       type: GatewayServerEvent.VOICE_STATE,
       state: 'processing',
@@ -225,6 +236,8 @@ export class RealtimeInputRuntime {
       return
     }
     this.turns.commit(transcriptTurn)
+    const sourceContext = this.audioSources.get(transcriptTurn.turnId)
+    if (sourceContext) { sourceContext.final = true; sourceContext.endedAt ??= Date.now() }
     this.transcripts.record(transcriptTurn.turnId, transcript)
     if (this.shouldEnsurePermissionResponse(transcriptTurn)) {
       this.ensurePermissionResponseFor(transcriptTurn)
@@ -236,6 +249,7 @@ export class RealtimeInputRuntime {
       role: 'user',
       content: transcript,
       source: 'voice-user',
+      ...(sourceContext ? { sourceContext } : {}),
       turnId: transcriptTurn.turnId,
       inputs: this.inputAssets.metadataForParts(
         this.transcripts.parts(transcriptTurn.turnId),
@@ -246,10 +260,12 @@ export class RealtimeInputRuntime {
       role: 'user',
       content: transcript,
       turnId: transcriptTurn.turnId,
+      ...(sourceContext ? { sourceContext } : {}),
     })
+    this.audioSources.delete(transcriptTurn.turnId)
   }
 
-  submit(event) {
+  submit(event, trustedSource = null) {
     let parts
     try {
       parts = withAttachmentAnchors(normalizeInputParts(
@@ -260,7 +276,7 @@ export class RealtimeInputRuntime {
       this.send({ type: GatewayServerEvent.ERROR, message: error.message })
       return
     }
-    const inputTurnId = this.createInputTurnId()
+    const inputTurnId = trustedSource?.utteranceId || this.createInputTurnId()
     parts = this.inputAssets.registerParts({
       ownerId: this.ownerId,
       sessionId: this.sessionId,
@@ -307,6 +323,7 @@ export class RealtimeInputRuntime {
       content: display,
       source: 'text-user',
       turnId: inputTurnId,
+      sourceContext: trustedSource,
       inputs: this.inputAssets.metadataForParts(parts),
     })
     this.send({
@@ -314,6 +331,7 @@ export class RealtimeInputRuntime {
       role: 'user',
       content: display,
       turnId: inputTurnId,
+      sourceContext: trustedSource,
     })
     this.ensureFrontend()
       .then(() => this.getFrontend().sendUserInput(parts, inputContext))

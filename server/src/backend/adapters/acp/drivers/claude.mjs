@@ -22,6 +22,8 @@ export const claudeBackendDriver = {
     directory,
     cliPath,
     claudeExecutable,
+    environment = {},
+    inheritEnvironment = true,
   }) {
     return {
       label: this.label,
@@ -30,7 +32,8 @@ export const claudeBackendDriver = {
         args: [resolve(root, 'scripts/runtime/claude-code-acp.mjs')],
         cwd: directory,
         env: {
-          ...baseEnvironment('claude'),
+          ...(inheritEnvironment ? baseEnvironment('claude') : {}),
+          ...environment,
           ELECTRON_RUN_AS_NODE: '1',
           ...(clean(cliPath)
             ? { CLAUDE_CODE_ACP_BIN: clean(cliPath) }

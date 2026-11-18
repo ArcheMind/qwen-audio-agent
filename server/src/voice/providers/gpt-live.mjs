@@ -71,13 +71,18 @@ export const gptLiveProvider = {
     const voice = String(sessionOptions?.voice || '').trim() || gptLiveProvider.voice()
     return {
       type: 'realtime',
-      instructions: buildFrontendInstructions(agentContext),
-      tools: gptLiveTools(agentContext),
-      output_modalities: ['audio'],
+      instructions: sessionOptions?.instructions || buildFrontendInstructions(agentContext),
+      tools: sessionOptions?.toolsDisabled === true ? [] : sessionOptions?.tools || gptLiveTools(agentContext),
+      ...(sessionOptions?.toolChoice ? { tool_choice: sessionOptions.toolChoice } : {}),
+      output_modalities: sessionOptions?.textOnly === true ? ['text'] : ['audio'],
       audio: {
         input: {
           format: { type: 'audio/pcm', rate: 24000 },
-          turn_detection: modelProfile().sessionDefaults.turnDetection,
+          turn_detection: {
+            ...modelProfile().sessionDefaults.turnDetection,
+            ...(sessionOptions?.manualResponse === true ? { create_response: false, interrupt_response: false } : {}),
+          },
+          ...(sessionOptions?.transcriptionModel ? { transcription: { model: sessionOptions.transcriptionModel } } : {}),
         },
         output: {
           format: { type: 'audio/pcm', rate: 24000 },

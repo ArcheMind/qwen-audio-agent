@@ -141,7 +141,7 @@ export class GatewayClientCommandRuntime {
     }
     const inputParts = inputPartsFromMessage(normalizedMessage)
     const task = this.taskOperations.submit({
-      objective, inputParts, submissionKey: clean(message.event_id),
+      objective, inputParts, submissionKey: clean(message.event_id), taskId: clean(message.task_id),
     }, { ownerId, sessionId })
     const publicTask = { ...task }
     delete publicTask.reused

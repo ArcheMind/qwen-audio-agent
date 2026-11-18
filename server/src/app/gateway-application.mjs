@@ -97,6 +97,11 @@ export function createGatewayApplication({
   gatewayAccess = null,
   publicEndpoint = undefined,
   webrtc = undefined,
+  transport = true,
+  moduleFactories = optionalModuleFactories,
+  offlineNotifications = true,
+  taskAdmission = null,
+  taskExecutionAdmission = null,
 } = {}) {
 const workBackend = backendRuntime || new BackendWorkRuntime({ backend: agent })
 const sessionJournalRuntime = sessionJournal || new SessionJournalRegistry({
@@ -124,6 +129,8 @@ const respondAuthorization = (taskId, id, decision, options) => (
   agent.respondAuthorization(taskId, id, decision, options)
 )
 const taskOperations = new TaskOperations({
+  admitTask: taskAdmission,
+  beforeExecution: taskExecutionAdmission,
   taskManager,
   backendRuntime: workBackend,
   permissionPolicy,
@@ -249,11 +256,11 @@ taskManager.recoverDelegated({
 // Offline notification subscriber: if a voice session does not claim a
 // pending notification within the delay window, deliver via desktop
 // notification (Electron) and WebSocket push.
-const unsubscribeOfflineNotifications = installOfflineNotifications({
+const unsubscribeOfflineNotifications = offlineNotifications ? installOfflineNotifications({
   taskManager,
   parentPort,
   delayMs: config.offlineNotificationDelayMs,
-})
+}) : null
 conversationSync.configureRetention({
   sessionTtlMs: config.conversationSessionTtlMs,
   maxSessions: config.maxConversationSessions,
@@ -295,7 +302,7 @@ const textModelCall = config.memoryAutoEnabled
       model: config.memoryModel,
     })
   : null
-const optionalModules = optionalModuleFactories.map(create => create({
+const optionalModules = moduleFactories.map(create => create({
   config, logger, conversationSync, textModelCall, audit: operationAudit,
   workBackend, agent, backendRuntime, taskManager,
   memoryProvider, frontendMemory, knowledgeProvider, knowledgeRetrievalProvider,
@@ -356,7 +363,7 @@ const publicEndpointRuntime = publicEndpoint === undefined
   : publicEndpoint
 
 let realtimeGateway
-const webRtcIngress = registerGatewayHttpRoutes(app, {
+const webRtcIngress = transport ? registerGatewayHttpRoutes(app, {
   config,
   logger,
   agent,
@@ -378,7 +385,7 @@ const webRtcIngress = registerGatewayHttpRoutes(app, {
   optionalModules,
   webrtc,
   getGateway: () => realtimeGateway,
-})
+}) : null
 
 function localGatewayOrigin(address) {
   const configuredHost = String(config.host || '').trim().toLowerCase()
@@ -439,7 +446,7 @@ const frontendRuntime = createFrontendRuntime({
   config,
   logger,
 })
-realtimeGateway = attachGatewayClientTransport(server, {
+realtimeGateway = transport ? attachGatewayClientTransport(server, {
   identityManager: gatewayAccessRuntime,
   frontendRuntime,
   inputArbitration,
@@ -447,7 +454,7 @@ realtimeGateway = attachGatewayClientTransport(server, {
   clientCommandRuntime: runtimeCommands,
   clientEventRouter: gatewayEventRouter,
   logger,
-})
+}) : null
 const start = ({ host = config.host, port = config.port } = {}) => {
   if (server.listening) return server
   server.listen(port, host, () => {

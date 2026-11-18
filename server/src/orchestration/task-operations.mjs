@@ -34,7 +34,7 @@ function permissionReceipt(admission, permissionId) {
  * or public protocol events. System jobs keep their own execution entry point.
  */
 export class TaskOperations {
-  constructor({ taskManager, backendRuntime, permissionPolicy, respondAuthorization, respondInput, conversationSnapshot } = {}) {
+  constructor({ taskManager, backendRuntime, permissionPolicy, respondAuthorization, respondInput, conversationSnapshot, admitTask, beforeExecution } = {}) {
     if (!taskManager) throw new TypeError('taskManager is required')
     this.taskManager = taskManager
     this.backendRuntime = backendRuntime
@@ -42,6 +42,8 @@ export class TaskOperations {
     this.respondAuthorization = respondAuthorization
     this.respondInput = respondInput
     this.conversationSnapshot = conversationSnapshot
+    this.admitTask = admitTask
+    this.beforeExecution = beforeExecution
     // A backend can request several permissions before any is answered. The
     // Task snapshot projects the latest one; retain the live requests as well.
     this.permissions = new Map()
@@ -57,12 +59,17 @@ export class TaskOperations {
     return this.taskManager.list({ sessionId, active, ...filters, ownerId: owner(context) })
   }
 
-  submit({ objective, inputParts = [], submissionKey }, context) {
+  submit({ objective, inputParts = [], submissionKey, taskId }, context) {
+    if (this.admitTask) {
+      const admitted = this.admitTask({ objective, inputParts, submissionKey, taskId }, context)
+      if (!admitted || typeof admitted.then === 'function') throw new TaskOperationError('not_authorized', 'Task has no current host authorization')
+      ;({ objective, inputParts = [], submissionKey, taskId } = admitted)
+    }
     const ownerId = owner(context)
     const { sessionId = 'main', turnId } = context
     const conversation = this.conversationSnapshot?.(context)
     return this.taskManager.create({
-      objective, ownerId, sessionId, turnId, submissionKey,
+      objective, ownerId, sessionId, turnId, submissionKey, taskId,
       runner: (_objective, execution) => this.run(inputWithUpdates(
         this.taskManager.tasks.get(execution.taskId), {
           objective, inputParts, ...(conversation ? { conversation } : {}),
@@ -105,6 +112,9 @@ export class TaskOperations {
     included.forEach(entry => { entry.status = 'pending' })
     if (included.length) this.taskManager.emit(TaskDomainEvent.UPDATED, task)
     try {
+      await this.taskManager.repository.store?.flush?.()
+      await this.beforeExecution?.(input, context)
+      context.signal?.throwIfAborted()
       const result = await this.backendRuntime.run(input, {
         ...context, ownerId,
         onEvent: event => {

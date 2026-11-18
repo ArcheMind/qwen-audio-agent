@@ -71,6 +71,10 @@ export function permissionResponseGate({ isCandidate, hasPendingPermission, clai
 export function createRealtimeSessionRuntime({
   ownerId, sessionId, send, logger: connectionLogger, observers,
   voiceAccess, actionCapabilities, initialInputSuspension = null,
+  providerSessionOptions = {}, getAudioSource = () => null,
+  onSpeechStarted = () => {}, onSpeechStopped = () => {},
+  hostToolHandler = null,
+  onGeneratedTranscript = () => {},
   onTaskEvent, onResponseDone = () => {},
   frontendToolSourcesReady = Promise.resolve(),
   memoryService, sessionDigests, notesStore,
@@ -227,6 +231,7 @@ export function createRealtimeSessionRuntime({
     defaultProvider: defaultRealtimeProvider,
     getAgentContext,
     getSessionOptions: () => ({
+      ...providerSessionOptions,
       ...(sessionOutputVoice ? { voice: sessionOutputVoice } : {}),
     }),
     shouldReconnect: () => inputEnabled || outputEnabled,
@@ -385,6 +390,7 @@ export function createRealtimeSessionRuntime({
       })
     : () => {}
   const toolCalls = new ToolCallHandler({
+    hostToolHandler,
     taskManager,
     taskOperations,
     ownerId,
@@ -536,6 +542,8 @@ export function createRealtimeSessionRuntime({
   const inputs = new RealtimeInputRuntime({
     ownerId,
     sessionId,
+    getAudioSource,
+    automaticResponse: providerSessionOptions.manualResponse !== true,
     turns,
     transcripts,
     inputAssets,
@@ -551,16 +559,19 @@ export function createRealtimeSessionRuntime({
     ensurePermissionResponseFor,
     reportFrontendError,
     onSpeechStarted: fields => {
+      onSpeechStarted(fields)
       connectionLogger.info('realtime.provider.speech_started', fields)
       observeSessionAudio({ type: 'speech_started', ...fields })
     },
     onSpeechStopped: fields => {
+      onSpeechStopped(fields)
       connectionLogger.info('realtime.provider.speech_stopped', fields)
       observeSessionAudio({ type: 'speech_stopped', ...fields })
     },
   })
 
   presentationRuntime = new RealtimePresentationRuntime({
+    onGeneratedTranscript,
     ownerId,
     sessionId,
     turns,
@@ -1202,6 +1213,11 @@ export function createRealtimeSessionRuntime({
       })
     },
     handleClientEvent,
+    submitTrustedInput(event, source) {
+      if (closed || sleeping || waking) throw new Error('Session is not accepting input')
+      if (!source?.speakerId || !source?.utteranceId) throw new TypeError('Trusted speaker and utterance are required')
+      inputs.submit(event, source)
+    },
     handleClientDelivery,
     applyInputSuspension,
     deactivate,

@@ -23,6 +23,8 @@ export const codexBackendDriver = {
     cliPath,
     modelUrl,
     permissionMode,
+    environment = {},
+    inheritEnvironment = true,
   }) {
     return {
       label: this.label,
@@ -31,7 +33,8 @@ export const codexBackendDriver = {
         args: [resolve(root, 'scripts/runtime/codex-acp.mjs')],
         cwd: directory,
         env: {
-          ...baseEnvironment('codex'),
+          ...(inheritEnvironment ? baseEnvironment('codex') : {}),
+          ...environment,
           ELECTRON_RUN_AS_NODE: '1',
           ...(clean(cliPath) ? { CODEX_ACP_BIN: clean(cliPath) } : {}),
           ...(clean(modelUrl)

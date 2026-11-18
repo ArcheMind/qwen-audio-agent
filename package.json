@@ -28,6 +28,10 @@
   ],
   "type": "module",
   "exports": {
+    "./headless-runtime": "./server/src/app/headless-runtime.mjs",
+    "./runtime-config": "./server/src/core/config.mjs",
+    "./runtime-environment": "./shared/runtime-environment.mjs",
+    "./agent-client": "./server/src/backend/adapters/agent-client.mjs",
     "./package.json": "./package.json",
     "./electron": "./shared/electron-host.cjs",
     "./gateway-protocol": "./server/src/core/gateway-protocol.mjs",

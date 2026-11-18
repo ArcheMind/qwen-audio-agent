@@ -27,7 +27,10 @@ export { resolveWebSearchConfiguration } from '../../../shared/web-search-config
 const here = dirname(fileURLToPath(import.meta.url))
 const sourceRoot = resolve(here, '../../..')
 const root = process.env.QWEN_AUDIO_AGENT_RUNTIME_ROOT || sourceRoot
-const runtimeEnvironment = loadRuntimeEnvironment({ root })
+const runtimeEnvironment = loadRuntimeEnvironment({
+  root,
+  readOnly: process.env.QWEN_AUDIO_AGENT_CONFIG_READ_ONLY === '1',
+})
 
 export function numberSetting(value, fallback, {
   min = Number.NEGATIVE_INFINITY,

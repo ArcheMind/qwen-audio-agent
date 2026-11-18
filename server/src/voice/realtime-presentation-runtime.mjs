@@ -81,6 +81,7 @@ export class RealtimePresentationRuntime {
     getOutputEnabled,
     getNonVoiceClient,
     getPlaybackReceipts = () => true,
+    onGeneratedTranscript = () => {},
     getResponseTurnCandidate,
     clearResponseCandidate,
     announcementQuietMs,
@@ -99,6 +100,7 @@ export class RealtimePresentationRuntime {
     this.getOutputEnabled = getOutputEnabled
     this.getNonVoiceClient = getNonVoiceClient
     this.getPlaybackReceipts = getPlaybackReceipts
+    this.onGeneratedTranscript = onGeneratedTranscript
     this.getResponseTurnCandidate = getResponseTurnCandidate
     this.clearResponseCandidate = clearResponseCandidate
     this.announcementQuietMs = announcementQuietMs
@@ -282,6 +284,7 @@ export class RealtimePresentationRuntime {
     const id = realtimeResponseId(event)
     const context = this.#contextFor(event)
     if (context.suppressed) return
+    this.onGeneratedTranscript({ responseId: id, ...this.publicContext(context), content: event.delta || '', final: false })
     if (this.getPlaybackReceipts() && !context.playbackStarted) {
       context.pendingTranscripts.push({
         content: event.delta || '',
@@ -301,6 +304,7 @@ export class RealtimePresentationRuntime {
     const id = realtimeResponseId(event)
     const context = this.#contextFor(event)
     if (context.suppressed) return
+    this.onGeneratedTranscript({ responseId: id, ...this.publicContext(context), content: event.transcript || '', final: true })
     context.transcriptDone = true
     context.assistantTranscript = event.transcript || ''
     if (this.getPlaybackReceipts() && !context.playbackStarted) {

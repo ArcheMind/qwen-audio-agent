@@ -57,10 +57,12 @@ const TRANSITIONS = new Map([
   ])],
   [TaskStatus.QUEUED, new Set([
     TaskStatus.RUNNING,
+    TaskStatus.CANCELLING,
     TaskStatus.FAILED,
     TaskStatus.CANCELLED,
   ])],
   [TaskStatus.RUNNING, new Set([
+    TaskStatus.QUEUED,
     TaskStatus.DELEGATED,
     TaskStatus.FINALIZING,
     TaskStatus.CANCELLING,

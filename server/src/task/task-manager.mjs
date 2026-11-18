@@ -75,9 +75,13 @@ export class TaskManager {
     scheduledTaskTimeoutMs = 1_800_000,
     logger: taskLogger = null,
     sessionJournal = null,
+    createTaskId = null,
+    executionEvidenceRequired = false,
   } = {}) {
     this.runner = runner
     this.repository = new TaskRepository({ store, serialize: persistedTask })
+    this.createTaskId = createTaskId
+    this.executionEvidenceRequired = executionEvidenceRequired
     // Compatibility view for ReminderScheduler and existing integrations.
     // New persistence behavior belongs to repository, not this Map-like view.
     this.tasks = this.repository
@@ -479,6 +483,7 @@ export class TaskManager {
   }
 
   #create({
+    taskId,
     objective,
     ownerId,
     sessionId,
@@ -505,10 +510,14 @@ export class TaskManager {
       ))
       if (existing) return { ...publicTask(existing), reused: true }
     }
+    const requestedId = String(taskId || '').trim()
+    if (requestedId && this.tasks.get(requestedId)) {
+      throw new Error('Task ID already exists with a different submission')
+    }
     const task = {
-      id: normalizedScope === TaskScope.USER
-        ? this.allocateTaskId()
-        : `system_${randomUUID()}`,
+      id: requestedId || (normalizedScope === TaskScope.USER
+        ? this.createTaskId?.() || this.allocateTaskId()
+        : `system_${randomUUID()}`),
       status: 'queued',
       scope: normalizedScope,
       kind: String(kind),
@@ -644,7 +653,7 @@ export class TaskManager {
 
   drain() {
     const queued = [...this.tasks.values()]
-      .filter(task => task.status === 'queued')
+      .filter(task => task.status === 'queued' && !task.schedulerHeld)
       .sort((left, right) => (
         Number(right.priority || 0) - Number(left.priority || 0)
         || (left.queuedAt || left.createdAt) - (right.queuedAt || right.createdAt)
@@ -659,12 +668,16 @@ export class TaskManager {
     const executionVersion = task.executionVersion || 0
     const resolveExecution = task.resolve
     task.recoveryPersistedStatus = null
-    transitionTask(task, TaskStatus.RUNNING)
-    task.startedAt = Date.now()
     task.abortController = new AbortController()
     this.schedulerFor(task).acquire(task)
     task.schedulerHeld = true
-    this.emit(TaskDomainEvent.RUNNING, task)
+    const observeExecution = () => {
+      if (task.status !== TaskStatus.QUEUED || task.terminalHandled || task.abortController?.signal.aborted) return
+      transitionTask(task, TaskStatus.RUNNING)
+      task.startedAt ??= Date.now()
+      this.emit(TaskDomainEvent.RUNNING, task)
+    }
+    if (!this.executionEvidenceRequired) observeExecution()
     task.progressTimer = setInterval(() => {
       if (isTaskActive(task.status)) {
         this.flushProgress(task)
@@ -673,6 +686,10 @@ export class TaskManager {
     task.progressTimer.unref?.()
     const onEvent = event => {
       if ((task.executionVersion || 0) !== executionVersion || task.terminalHandled) return
+      if (this.executionEvidenceRequired && (
+        [BackendEventType.MESSAGE, BackendEventType.ARTIFACT, BackendEventType.AUTHORIZATION_REQUESTED, BackendEventType.INPUT_REQUESTED].includes(event?.type)
+        || (event?.type === BackendEventType.ACTIVITY && ['tool', 'thinking'].includes(event.activity?.kind))
+      )) observeExecution()
       if (
         event?.type === BackendEventType.AUTHORIZATION_REQUESTED
         && event.permission
@@ -831,6 +848,7 @@ export class TaskManager {
     }
     Promise.resolve()
       .then(() => {
+        task.abortController.signal.throwIfAborted()
         if (typeof task.runner !== 'function') {
           throw new Error('未配置后台 Agent 执行器')
         }
@@ -844,6 +862,7 @@ export class TaskManager {
           (task.executionVersion || 0) !== executionVersion || task.terminalHandled
           || ['cancelling', 'cancelled'].includes(task.status)
         ) return
+        observeExecution()
         this.flushProgress(task)
         transitionTask(task, TaskStatus.COMPLETED)
         task.result = String(outcome?.content ?? outcome ?? '').trim()
@@ -915,7 +934,7 @@ export class TaskManager {
     }
     if (task.cancelPromise) return task.cancelPromise
     const previousStatus = task.status
-    if (previousStatus === 'queued' || previousStatus === 'scheduled') {
+    if ((previousStatus === 'queued' && !task.schedulerHeld) || previousStatus === 'scheduled') {
       return this.finishCancellation(task)
     }
     transitionTask(task, TaskStatus.CANCELLING)
@@ -972,6 +991,15 @@ export class TaskManager {
         return failedSnapshot
       })
     return task.cancelPromise
+  }
+
+  queueInputContinuation(id, inputRequestId, { ownerId, queuedAt = Date.now() } = {}) {
+    const task = this.tasks.get(String(id))
+    if (!this.executionEvidenceRequired || !task || task.ownerId !== ownerId || task.status !== TaskStatus.RUNNING || task.inputRequest?.id !== inputRequestId || task.inputRequest.status !== 'pending') throw new Error('Input continuation is not currently authorized')
+    transitionTask(task, TaskStatus.QUEUED)
+    task.queuedAt = queuedAt
+    this.emit(TaskDomainEvent.UPDATED, task)
+    return publicTask(task)
   }
 
   async cancelSeries(seriesId, { ownerId } = {}) {
