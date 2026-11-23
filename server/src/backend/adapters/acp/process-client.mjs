@@ -511,8 +511,11 @@ export class AcpProcessClient {
     meta,
     ownerId,
     role = 'project',
+    systemPrompt,
   } = {}) {
     await this.start()
+    if (systemPrompt && !this.capabilities.sessionCapabilities?.systemPrompt)
+      throw new AgentError(`${this.label} does not support session systemPrompt`, { protocol: 'acp' })
     assertMcpServerCapabilities({
       label: this.label,
       capabilities: this.capabilities,
@@ -522,12 +525,14 @@ export class AcpProcessClient {
       cwd,
       mcpServers,
       ...(meta ? { _meta: meta } : {}),
+      ...(systemPrompt ? { systemPrompt } : {}),
     })
     return this.rememberSession(response.sessionId, {
       cwd,
       meta,
       ownerId,
       role,
+      systemPrompt,
       mcpServers,
       response,
     })
@@ -539,8 +544,11 @@ export class AcpProcessClient {
     meta,
     ownerId,
     role = 'project',
+    systemPrompt,
   } = {}) {
     await this.start()
+    if (systemPrompt && !this.capabilities.sessionCapabilities?.systemPrompt)
+      throw new AgentError(`${this.label} does not support session systemPrompt`, { protocol: 'acp' })
     assertMcpServerCapabilities({
       label: this.label,
       capabilities: this.capabilities,
@@ -551,6 +559,7 @@ export class AcpProcessClient {
       cwd,
       mcpServers,
       ...(meta ? { _meta: meta } : {}),
+      ...(systemPrompt ? { systemPrompt } : {}),
     }
     const sessionCapabilities = this.capabilities.sessionCapabilities || {}
     let response
@@ -569,6 +578,7 @@ export class AcpProcessClient {
       meta,
       ownerId,
       role,
+      systemPrompt,
       mcpServers,
       response,
     })

@@ -9,6 +9,7 @@ function harness({
   turnCitations = null,
   terminalToolResponses = [],
   resultSummaryResponses = [],
+  pendingToolResponses = [],
   perResponseInstructions = false,
   playbackReceipts = true,
   announcementWindow = null,
@@ -28,6 +29,8 @@ function harness({
     ensureResponse: async (...args) => calls.push(['ensureResponse', ...args]),
   }
   const terminalResponses = new Set(terminalToolResponses)
+  const pendingResponses = new Set([...pendingToolResponses, ...resultSummaryResponses])
+  const settlements = new Map()
   const runtime = new RealtimePresentationRuntime({
     ownerId: 'owner-1',
     sessionId: 'session-1',
@@ -50,10 +53,19 @@ function harness({
         calls.push(['consumeTerminalToolResponse', id])
         return terminalResponses.delete(id)
       },
-      finishToolResponse: async (...args) => calls.push([
-        'finishToolResponse',
-        ...args,
-      ]),
+      settleToolResponse: (responseId, options = {}) => {
+        calls.push(['settleToolResponse', responseId, options])
+        assert.equal(typeof responseId, 'string')
+        const { sourceHasSpeech = false, suppressResponse = false } = options
+        assert.equal(typeof sourceHasSpeech, 'boolean')
+        assert.equal(typeof suppressResponse, 'boolean')
+        assert.equal(settlements.has(responseId), false)
+        const deferred = Promise.withResolvers()
+        settlements.set(responseId, deferred)
+        if (suppressResponse) deferred.resolve({ disposition: 'cancelled' })
+        else if (!pendingResponses.has(responseId)) deferred.resolve({ disposition: 'terminal' })
+        return deferred.promise
+      },
     },
     send: event => events.push(event),
     getFrontend: () => frontend,
@@ -75,6 +87,13 @@ function harness({
     events,
     records,
     calls,
+    settleToolResults(responseId, disposition) {
+      assert.ok(pendingResponses.delete(responseId), 'only an outstanding tool batch can settle')
+      assert.ok(['continued', 'terminal', 'cancelled', 'failed'].includes(disposition))
+      const deferred = settlements.get(responseId)
+      assert.ok(deferred, 'generation must request settlement before pending work completes')
+      deferred.resolve({ disposition })
+    },
     setResponseTurnCandidate(value) {
       responseTurnCandidate = value
     },
@@ -243,22 +262,23 @@ test('does not persist a model-generated Gateway protocol envelope', () => {
   )
 })
 
-test('allows only one protocol correction per user turn, including repeated invalid corrections', () => {
+test('allows only one protocol correction per user turn, including repeated invalid corrections', async () => {
   const setup = harness({ perResponseInstructions: true })
-  const invalidResponse = id => {
+  const invalidResponse = async id => {
     const context = setup.turns.committed()
     deliver(setup.runtime, {
       type: 'response.text.done', response_id: id,
       text: '<permission_request>fake</permission_request>', __voiceContext: context,
     })
     deliver(setup.runtime, { type: 'response.done', response: { id, status: 'completed' } })
+    await new Promise(resolve => setImmediate(resolve))
   }
   const first = setup.turns.beginVoice('input-1').context
   setup.turns.endSpeech()
   setup.turns.commit(first)
-  invalidResponse('response-1')
-  invalidResponse('response-2')
-  invalidResponse('response-3')
+  await invalidResponse('response-1')
+  await invalidResponse('response-2')
+  await invalidResponse('response-3')
   const corrections = () => setup.calls.filter(([name]) => name === 'ensureResponse')
   assert.equal(corrections().length, 1)
   assert.equal(corrections()[0][2].shouldCreate(), true)
@@ -266,7 +286,7 @@ test('allows only one protocol correction per user turn, including repeated inva
   setup.turns.endSpeech()
   setup.turns.commit(second)
   assert.equal(corrections()[0][2].shouldCreate(), false)
-  invalidResponse('response-4')
+  await invalidResponse('response-4')
   assert.equal(corrections().length, 2)
 })
 
@@ -371,7 +391,7 @@ test('retires an audio response only after response, transcript and playback end
 })
 
 test('keeps processing while a foreground tool result is pending', () => {
-  const { runtime, events } = harness()
+  const { runtime, events } = harness({ pendingToolResponses: ['response-1'] })
 
   deliver(runtime, {
     type: 'response.created',
@@ -412,6 +432,35 @@ test('returns to idle after a terminal tool response', () => {
   )
 })
 
+for (const disposition of ['continued', 'terminal']) {
+  test(`pending tool work emits ${disposition} settlement only after its Promise resolves`, async () => {
+    const setup = harness({ pendingToolResponses: ['provider-part-1'] })
+    deliver(setup.runtime, {
+      type: 'response.created',
+      response: { id: 'provider-part-1' },
+      __voiceContext: { turnId: 'turn-1', turnGeneration: 1 },
+    })
+    setup.runtime.markFunctionCall('provider-part-1')
+    deliver(setup.runtime, {
+      type: 'response.done',
+      response: { id: 'provider-part-1', status: 'completed' },
+    })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(setup.events.some(event => event.type === 'response.settled'), false)
+    assert.equal(setup.calls.some(([name]) => name === 'finishPlayback'), false)
+
+    setup.settleToolResults('provider-part-1', disposition)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.deepEqual(setup.events.filter(event => event.type === 'response.settled').map(event => ({
+      responseId: event.responseId,
+      turnId: event.turnId,
+      turnGeneration: event.turnGeneration,
+      disposition: event.disposition,
+    })), [{ responseId: 'provider-part-1', turnId: 'turn-1', turnGeneration: 1, disposition }])
+    assert.equal(setup.calls.some(([name]) => name === 'finishPlayback'), false)
+  })
+}
+
 test('releases a spoken function-call turn when its tool follow-up is suppressed', () => {
   const { runtime, events, calls } = harness()
 
@@ -432,8 +481,8 @@ test('releases a spoken function-call turn when its tool follow-up is suppressed
   assert.equal(events.at(-1).type, 'voice.state')
   assert.equal(events.at(-1).state, 'idle')
   assert.deepEqual(
-    calls.find(([name]) => name === 'finishToolResponse'),
-    ['finishToolResponse', 'response-1', {
+    calls.find(([name]) => name === 'settleToolResponse'),
+    ['settleToolResponse', 'response-1', {
       suppressResponse: false,
       sourceHasSpeech: true,
     }],
@@ -465,8 +514,8 @@ test('keeps a spoken inline-tool turn open until its results can be summarized',
     response: { id: 'response-1', status: 'completed' },
   })
 
-  assert.deepEqual(calls.find(([name]) => name === 'finishToolResponse'), [
-    'finishToolResponse', 'response-1', { suppressResponse: false, sourceHasSpeech: true },
+  assert.deepEqual(calls.find(([name]) => name === 'settleToolResponse'), [
+    'settleToolResponse', 'response-1', { suppressResponse: false, sourceHasSpeech: true },
   ])
   assert.equal(calls.find(([name]) => name === 'responseDone')[1].awaitsToolFollowUp, true)
 })
@@ -481,8 +530,8 @@ for (const status of ['failed', 'cancelled', 'incomplete']) {
     })
     runtime.markFunctionCall('response-1')
     deliver(runtime, { type: 'response.done', response: { id: 'response-1', status } })
-    assert.deepEqual(calls.find(([name]) => name === 'finishToolResponse'), [
-      'finishToolResponse', 'response-1', { suppressResponse: true, sourceHasSpeech: false },
+    assert.deepEqual(calls.find(([name]) => name === 'settleToolResponse'), [
+      'settleToolResponse', 'response-1', { suppressResponse: true, sourceHasSpeech: false },
     ])
     assert.equal(calls.find(([name]) => name === 'responseDone')[1].awaitsToolFollowUp, false)
   })

@@ -144,6 +144,7 @@ export class RealtimePresentationRuntime {
       taskIds: context.taskIds,
       origin: context.origin,
       turnGeneration: context.turnGeneration,
+      continuationOf: context.continuationOf || null,
     }
   }
 
@@ -276,7 +277,7 @@ export class RealtimePresentationRuntime {
       sampleRate: Number(event.sampleRate)
         || this.getFrontend().provider.outputSampleRate,
       responseId: id,
-      turnId: responseTurnId,
+      ...this.publicContext(context),
     })
   }
 
@@ -327,6 +328,7 @@ export class RealtimePresentationRuntime {
     const id = realtimeResponseId(event)
     const context = this.#contextFor(event)
     if (context.suppressed) return
+    this.onGeneratedTranscript({ responseId: id, ...this.publicContext(context), content: event.delta || '', final: false })
     this.#emitTranscript({
       id,
       context,
@@ -339,6 +341,7 @@ export class RealtimePresentationRuntime {
     const id = realtimeResponseId(event)
     const context = this.#contextFor(event)
     if (context.suppressed) return
+    this.onGeneratedTranscript({ responseId: id, ...this.publicContext(context), content: event.text || '', final: true })
     context.transcriptDone = true
     context.assistantTranscript = event.text || ''
     this.#emitTranscript({
@@ -381,6 +384,7 @@ export class RealtimePresentationRuntime {
     if (!context?.suppressed) {
       this.send({
         type: GatewayServerEvent.AUDIO_DONE,
+        ...this.publicContext(context),
         responseId: id,
         turnId: responseTurnId,
       })
@@ -459,18 +463,22 @@ export class RealtimePresentationRuntime {
     })
     // Set the source response's waiting state first: a failed tool batch can
     // settle synchronously and must not have its release overwritten below.
-    this.toolCalls.finishToolResponse(id, {
-      suppressResponse,
-      sourceHasSpeech,
-    }).catch(error => this.send({
-      type: GatewayServerEvent.ERROR,
-      message: error.message,
-    }))
-    if (guardDecision) this.#requestGuardCorrection(guardDecision, context, responseTurnId)
+    this.toolCalls.settleToolResponse(id, { suppressResponse, sourceHasSpeech }).then(async tools => {
+      const corrected = guardDecision && tools.disposition === 'terminal' && !suppressResponse
+        ? await this.#requestGuardCorrection(guardDecision, context, responseTurnId, id)
+        : null
+      const disposition = failed
+        ? responseStatus === 'cancelled' ? 'cancelled' : 'failed'
+        : context?.suppressed ? 'cancelled' : corrected?.disposition || tools.disposition
+      this.send({ type: 'response.settled', responseId: id, ...this.publicContext(context), disposition })
+    }).catch(error => {
+      this.send({ type: 'response.settled', responseId: id, ...this.publicContext(context), disposition: 'failed' })
+      this.send({ type: GatewayServerEvent.ERROR, message: error.message })
+    })
     this.#flushAnnouncementsSoon()
   }
 
-  #requestGuardCorrection(decision, context, responseTurnId) {
+  async #requestGuardCorrection(decision, context, responseTurnId, responseId) {
     const frontend = this.getFrontend()
     if (
       !this.getOutputEnabled()
@@ -492,16 +500,19 @@ export class RealtimePresentationRuntime {
     // The budget belongs to the user turn, not a Response. A correction may
     // itself be invalid; it must never become a self-sustaining response loop.
     this.lastCorrectionTurn = turnKey
-    frontend.ensureResponse({
+    const result = await frontend.ensureResponse({
       turnId: responseTurnId,
       turnGeneration: generation,
+      continuationOf: responseId,
     }, {
       shouldCreate: isCurrent,
       response: { instructions: decision.instructions },
-    }).catch(error => this.send({
-      type: GatewayServerEvent.ERROR,
-      message: error.message,
-    }))
+    })
+    const disposition = result?.completed ? 'continued'
+      : !result || result.cancelled || result.status === 'cancelled' || !isCurrent()
+        ? 'cancelled'
+        : result.skipped && !result.unsupported ? 'terminal' : 'failed'
+    return { disposition }
   }
 
   #emitTranscript({ id, context, content, final }) {

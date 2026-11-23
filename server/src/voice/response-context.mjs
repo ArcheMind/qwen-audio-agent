@@ -9,6 +9,7 @@ const CORRELATED_CONTEXT_FIELDS = [
   'authorizationId',
   'turnGeneration',
   'consumesTaskNotification',
+  'continuationOf',
 ]
 
 /**

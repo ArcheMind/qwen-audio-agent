@@ -534,6 +534,7 @@ test('batched status results retain task-notification acknowledgement context', 
   assert.equal(kit.ensuredResponses.length, 1)
   assert.deepEqual(kit.ensuredResponses[0][0], {
     turnId: 'turn-one', turnGeneration: 1,
+    continuationOf: 'response-tools',
     taskId: task.id, taskIds: [task.id], consumesTaskNotification: true,
   })
 })
@@ -2957,6 +2958,7 @@ test('combines multiple memory writes from one model response into one follow-up
   assert.deepEqual(kit.ensuredResponses[0][0], {
     turnId: 'turn-one',
     turnGeneration: 1,
+    continuationOf: 'response-memory-batch',
   })
 })
 

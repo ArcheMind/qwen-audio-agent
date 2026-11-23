@@ -1219,6 +1219,9 @@ export function createRealtimeSessionRuntime({
       inputs.submit(event, source)
     },
     handleClientDelivery,
+    deliverAgent: delivery => closed
+      ? Promise.resolve({ completed: false, unavailable: true })
+      : agentDeliveries.deliver(delivery),
     deliverContext: delivery => agentDeliveries.deliver({ ...delivery, mode: 'context' }),
     applyInputSuspension,
     deactivate,

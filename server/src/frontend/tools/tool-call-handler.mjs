@@ -401,8 +401,11 @@ export class ToolCallHandler {
       responseContext: {},
       taskIds: [],
     }
+    if (!batch.settlement) batch.settlement = new Promise(resolve => { batch.settle = resolve })
     if (!this.deferredToolResponses.has(key) && this.deferredToolResponses.size >= 100) {
-      this.deferredToolResponses.delete(this.deferredToolResponses.keys().next().value)
+      const oldest = this.deferredToolResponses.keys().next().value
+      this.deferredToolResponses.get(oldest).settle({ disposition: 'cancelled' })
+      this.deferredToolResponses.delete(oldest)
     }
     batch.pending += 1
     batch.responseRequested ||= requestResponse
@@ -449,10 +452,19 @@ export class ToolCallHandler {
     await this.flushDeferredToolResponse(key, batch)
   }
 
+  async settleToolResponse(responseId, options) {
+    const batch = this.deferredToolResponses.get(String(responseId || ''))
+    if (!batch) return { disposition: 'terminal' }
+    await this.finishToolResponse(responseId, options)
+    return batch.settlement
+  }
+
   async flushDeferredToolResponse(responseId, batch) {
-    if (!batch.sourceDone || batch.pending > 0) return
+    if (!batch.sourceDone || batch.pending > 0 || batch.flushing) return
+    batch.flushing = true
     this.deferredToolResponses.delete(responseId)
     if (batch.failed) {
+      batch.settle({ disposition: 'failed' })
       this.onToolResponseFailed({ responseId, turnId: batch.turnId })
       return
     }
@@ -460,7 +472,10 @@ export class ToolCallHandler {
       batch.suppressResponse || !batch.responseRequested
       || (batch.sourceHasSpeech && !batch.requiresResultSummary)
       || this.isStale(batch.turnId, batch.turnGeneration)
-    ) return
+    ) {
+      batch.settle({ disposition: batch.suppressResponse || this.isStale(batch.turnId, batch.turnGeneration) ? 'cancelled' : 'terminal' })
+      return
+    }
     const instructions = [...batch.responseInstructions]
     if (batch.requiresResultSummary && instructions.length) {
       instructions.push(
@@ -468,11 +483,12 @@ export class ToolCallHandler {
       )
     }
     try {
-      await this.getFrontend()?.ensureResponse?.(
+      const result = await this.getFrontend()?.ensureResponse?.(
         {
+          ...batch.responseContext,
           turnId: batch.turnId,
           turnGeneration: batch.turnGeneration,
-          ...batch.responseContext,
+          continuationOf: responseId,
           ...(batch.taskIds.length ? {
             taskId: batch.taskIds[0],
             taskIds: batch.taskIds,
@@ -490,7 +506,13 @@ export class ToolCallHandler {
           } : {}),
         },
       )
+      const disposition = result?.completed ? 'continued'
+        : !result || result.cancelled || result.status === 'cancelled' || this.isStale(batch.turnId, batch.turnGeneration)
+          ? 'cancelled'
+          : result.skipped && !result.unsupported ? 'terminal' : 'failed'
+      batch.settle({ disposition })
     } catch (error) {
+      batch.settle({ disposition: 'failed' })
       this.onToolResponseFailed({ responseId, turnId: batch.turnId })
       throw error
     }
